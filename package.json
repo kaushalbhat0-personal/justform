@@ -5,7 +5,8 @@
   "description": "FORMOS — modular-monolith multi-tenant form platform (Phase 0 foundation)",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -13,7 +14,9 @@
     "test": "npm run test --workspaces --if-present",
     "test:unit": "npm run test:unit --workspaces --if-present",
     "guards": "node scripts/guards/architecture-guards.mjs",
-    "ci": "npm run typecheck && npm run lint && npm run guards && npm run test"
+    "build:libs": "npm run build --workspace @formos/domain --workspace @formos/config --workspace @formos/auth --workspace @formos/database --workspace @formos/ui",
+    "build": "npm run build --workspace @formos/web",
+    "ci": "npm run build:libs && npm run typecheck && npm run lint && npm run guards && npm run test && npm run build"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",

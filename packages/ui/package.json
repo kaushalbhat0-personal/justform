@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./tokens.js",
-  "types": "./tokens.d.ts"
+  "main": "./dist/tokens.js",
+  "types": "./dist/tokens.d.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json"
+  }
 }

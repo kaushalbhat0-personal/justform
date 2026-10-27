@@ -78,7 +78,7 @@ for (const dir of browserDirs) {
   if (!existsSync(dir)) continue;
   const walk = (d) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
-      if (["node_modules", "dist"].includes(e.name)) continue;
+      if (["node_modules", "dist", ".next", "coverage"].includes(e.name)) continue;
       const p = join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (/\.(ts|tsx|js|mjs|css|json)$/.test(e.name)) {
