@@ -95,6 +95,87 @@ ok("G4 browser trees clean of secrets/service-role");
 if (/CREATE EXTENSION/i.test(sql)) fail("G5 CREATE EXTENSION present — requires ADR exception");
 else ok("G5 no extensions in migrations");
 
+// G6: form-engine purity + renderer boundary (Phase 2).
+// - schema.ts (canonical model) has zero imports (no React/RJSF/RHF/Zod/Next/Supabase/DB).
+// - no executable-code surface: eval(, new Function(, dynamic import( in shipped
+//   engine/renderer sources (tests may use static import only; the deliberate
+//   AJV poison-stub is exempt and must only throw).
+// - no AJV imports in shipped sources; no ajv in @formos/renderer dependencies.
+// - @rjsf/* imports exist ONLY inside packages/renderer (ADR-003 boundary).
+{
+  const engineSrc = join(root, "packages", "forms-engine", "src");
+  const rendererSrc = join(root, "packages", "renderer", "src");
+  const rendererTests = join(root, "packages", "renderer", "tests");
+  const SKIP_DIRS = new Set(["node_modules", "dist", ".next", "coverage", ".turbo", "out"]);
+  const readTree = (dir) => {
+    const out = [];
+    const walk = (d) => {
+      if (!existsSync(d)) return;
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        if (SKIP_DIRS.has(e.name)) continue;
+        const p = join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(ts|tsx|mjs|js)$/.test(e.name)) out.push(p);
+      }
+    };
+    walk(dir);
+    return out;
+  };
+  const shipped = [...readTree(engineSrc), ...readTree(rendererSrc), ...readTree(rendererTests)];
+  const schemaPath = join(engineSrc, "schema.ts");
+  const schemaSrc = existsSync(schemaPath) ? readFileSync(schemaPath, "utf8") : "";
+  if (/^\s*import\s/m.test(schemaSrc) || /require\s*\(/.test(schemaSrc)) {
+    fail("G6 schema.ts must have zero imports (canonical purity)");
+  } else ok("G6 schema.ts has zero imports");
+  let executable = 0;
+  for (const p of shipped) {
+    const c = readFileSync(p, "utf8");
+    const isAjvStub = p.endsWith(join("tests", "stubs", "validator-ajv8.ts"));
+    if (/\beval\s*\(/.test(c) || /new\s+Function\s*\(/.test(c) || /import\s*\(/.test(c)) {
+      fail(`G6 executable-code surface in shipped source: ${p}`);
+      executable += 1;
+    }
+    if (!isAjvStub && (/from\s+["'][^"']*ajv/i.test(c) || /require\(\s*["'][^"']*ajv/i.test(c))) {
+      fail(`G6 AJV import in shipped source: ${p}`);
+      executable += 1;
+    }
+    if (isAjvStub && !/must never be used/.test(c)) {
+      fail("G6 AJV poison-stub lost its throwing guard");
+      executable += 1;
+    }
+  }
+  if (executable === 0) ok("G6 no eval/new Function/dynamic import/AJV in shipped engine+renderer");
+  try {
+    const rendererPkg = JSON.parse(readFileSync(join(root, "packages", "renderer", "package.json"), "utf8"));
+    const deps = { ...(rendererPkg.dependencies ?? {}), ...(rendererPkg.peerDependencies ?? {}) };
+    if (Object.keys(deps).some((d) => /ajv/i.test(d))) fail("G6 ajv in @formos/renderer prod dependencies");
+    else ok("G6 @formos/renderer prod dependencies AJV-free");
+  } catch {
+    fail("G6 cannot read packages/renderer/package.json");
+  }
+  const rjsfOutside = [];
+  const scanDirs = [
+    join(root, "apps"),
+    join(root, "packages", "domain"),
+    join(root, "packages", "auth"),
+    join(root, "packages", "database"),
+    join(root, "packages", "config"),
+    join(root, "packages", "forms-engine"),
+    join(root, "packages", "ui"),
+    join(root, "scripts"),
+  ];
+  for (const dir of scanDirs) {
+    for (const p of readTree(dir)) {
+      const c = readFileSync(p, "utf8");
+      if (/from\s+["']@rjsf\//.test(c) || /require\(\s*["']@rjsf\//.test(c) || /import\s+["']@rjsf\//.test(c)) {
+        rjsfOutside.push(p);
+      }
+    }
+  }
+  if (rjsfOutside.length > 0) fail(`G6 @rjsf imports outside packages/renderer: ${rjsfOutside.join(", ")}`);
+  else ok("G6 @rjsf imports contained in packages/renderer");
+}
+
 if (failures.length > 0) {
   console.log(`\n${failures.length} guard(s) failed`);
   process.exit(1);
