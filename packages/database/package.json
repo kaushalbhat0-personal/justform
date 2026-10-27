@@ -1,0 +1,17 @@
+{
+  "name": "@formos/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:unit": "vitest run"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "vitest": "^3.1.3"
+  }
+}

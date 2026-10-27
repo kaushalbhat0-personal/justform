@@ -1,0 +1,28 @@
+:root {
+  /* FORMOS design tokens v0 — CSS mirror of packages/ui/tokens.ts (keep in sync). */
+  --bg: #FAF7F2;
+  --surface: #FFFFFF;
+  --surface-raised: #F3EEE6;
+  --border: #E5DDD2;
+  --border-strong: #CFC3B4;
+  --text: #1C1917;
+  --text-muted: #78716C;
+  --primary: #1D4ED8;
+  --primary-hover: #1E40AF;
+  --danger: #B91C1C;
+  --warning: #B45309;
+  --success: #15803D;
+  --info: #0E7490;
+  --focus-ring: #1D4ED8;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --touch-target: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
