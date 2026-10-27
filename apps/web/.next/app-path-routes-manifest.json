@@ -1,9 +1,0 @@
-{
-  "/_global-error/page": "/_global-error",
-  "/_not-found/page": "/_not-found",
-  "/app/[ws]/page": "/app/[ws]",
-  "/app/invite/[token]/page": "/app/invite/[token]",
-  "/app/page": "/app",
-  "/login/page": "/login",
-  "/page": "/"
-}

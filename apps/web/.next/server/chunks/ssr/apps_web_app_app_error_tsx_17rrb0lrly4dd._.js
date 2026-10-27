@@ -1,3 +1,0 @@
-module.exports=[38309,a=>{"use strict";var b=a.i(87924),c=a.i(72131);a.s(["default",0,function({error:a,reset:d}){return(0,c.useEffect)(()=>{},[a]),(0,b.jsxs)("div",{className:"card",children:[(0,b.jsx)("h1",{children:"Something went wrong"}),(0,b.jsx)("div",{className:"error",role:"alert",children:a.message||"Request failed."}),(0,b.jsx)("div",{className:"row",children:(0,b.jsx)("button",{type:"button",onClick:()=>d(),children:"Try again"})})]})}])}];
-
-//# sourceMappingURL=apps_web_app_app_error_tsx_17rrb0lrly4dd._.js.map

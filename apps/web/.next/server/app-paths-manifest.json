@@ -1,9 +1,0 @@
-{
-  "/_global-error/page": "app/_global-error/page.js",
-  "/_not-found/page": "app/_not-found/page.js",
-  "/app/[ws]/page": "app/app/[ws]/page.js",
-  "/app/invite/[token]/page": "app/app/invite/[token]/page.js",
-  "/app/page": "app/app/page.js",
-  "/login/page": "app/login/page.js",
-  "/page": "app/page.js"
-}
