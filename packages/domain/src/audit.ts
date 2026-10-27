@@ -14,6 +14,7 @@ export const AUDIT_ACTIONS = [
   "form.updated",
   "form.published",
   "form.unpublished",
+  "form.deleted",
   "submission.assigned",
   "submission.status_changed",
   "submission.exported",

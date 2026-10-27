@@ -176,6 +176,21 @@ else ok("G5 no extensions in migrations");
   else ok("G6 @rjsf imports contained in packages/renderer");
 }
 
+// G7: published snapshots are structurally immutable (Phase 4 invariant).
+// form_versions must have: the immutability trigger, zero UPDATE/DELETE/ALL
+// policies, and zero direct UPDATE/DELETE grants (writes flow via DEFINER RPC).
+{
+  const hasTrigger = /TRIGGER\s+form_versions_immutable/i.test(sql);
+  const dmlPolicy = /CREATE\s+POLICY\s+\w+\s+ON\s+public\.form_versions\s+FOR\s+(UPDATE|DELETE|ALL)/i.test(sql);
+  const dmlGrant = /GRANT\s+[^;]*\b(UPDATE|DELETE)\b[^;]*ON\s+(TABLE\s+)?public\.form_versions/i.test(sql);
+  if (!hasTrigger) fail("G7 form_versions missing immutability trigger");
+  else ok("G7 form_versions immutability trigger present");
+  if (dmlPolicy) fail("G7 form_versions has UPDATE/DELETE/ALL policy — snapshots must be policy-immutable");
+  else ok("G7 form_versions has no UPDATE/DELETE/ALL policy");
+  if (dmlGrant) fail("G7 direct UPDATE/DELETE grant on form_versions — writes must be RPC-only");
+  else ok("G7 form_versions has no direct UPDATE/DELETE grants");
+}
+
 if (failures.length > 0) {
   console.log(`\n${failures.length} guard(s) failed`);
   process.exit(1);

@@ -1,4 +1,5 @@
 import type * as React from "react";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getMembership } from "@/lib/identity";
 import { supabaseServer } from "@/lib/supabaseServer";
@@ -17,6 +18,9 @@ export default async function WorkspacePage({ params }: { params: Promise<{ ws: 
       <h1>{workspace?.name ?? "Workspace"}</h1>
       <p className="muted">Your role: <span className="badge">{membership.role}</span></p>
       <MemberTable workspaceId={ws} myRole={membership.role} myUserId={membership.id} />
+      <p>
+        <Link href={`/app/${ws}/forms`}>Forms</Link>
+      </p>
       <InvitePanel workspaceId={ws} myRole={membership.role} />
       <AuditList workspaceId={ws} myRole={membership.role} />
     </div>
