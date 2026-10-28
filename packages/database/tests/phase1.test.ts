@@ -47,10 +47,14 @@ describe("Phase 1: invitations", () => {
     await fixture(t);
   }, 30000);
 
+  // Deterministic ids: the previous Math.random() helper collided across
+  // invite() calls within one test run (birthday paradox over ~100 values).
+  let inviteSeq = 100;
   const invite = async (email: string, role: string, expiresAt: string): Promise<{ id: string; hash: string }> => {
     const token = randomBytes(32).toString("base64url");
     const hash = tokenHash(token);
-    const id = uuid(60 + Math.floor(Math.random() * 100));
+    inviteSeq += 1;
+    const id = uuid(inviteSeq);
     await t.asUser(A.alice, `INSERT INTO public.invitations (id, workspace_id, email, role, token_hash, expires_at) VALUES ($1,$2,$3,$4,$5,$6)`, [id, W, email, role, hash, expiresAt], E.alice);
     return { id, hash };
   };

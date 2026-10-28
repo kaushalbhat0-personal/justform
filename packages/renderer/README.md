@@ -18,11 +18,23 @@ the fallback renderer swap stays local to this package).
 ## AJV vendor-out (S1 criterion e)
 
 `@rjsf/core`'s barrel statically imports `@rjsf/validator-ajv8` solely for its
-`getTestRegistry` helper, which FORMOS never uses. Production bundlers drop
-that dead export (`sideEffects: false` in `@rjsf/core`), so AJV never ships —
-asserted structurally in `tests/s1.test.tsx` (no ajv in prod dependency trees
-+ `sideEffects: false`). The vitest module graph aliases the specifier to a
-poisoned stub (`tests/stubs/validator-ajv8.ts`): any actual use throws loudly.
+`getTestRegistry` helper, which FORMOS never uses. Two mechanisms keep AJV
+out of the product:
+
+- **Vitest:** module graph aliases the specifier to a poisoned stub
+  (`tests/stubs/validator-ajv8.ts`): any actual use throws loudly.
+- **Production (load-bearing since IMPL-005):** Turbopack/webpack resolve
+  *every* static barrel import, so `sideEffects: false` tree-shaking alone is
+  NOT sufficient — the unaliased prod build fails on the unresolvable
+  specifier. `apps/web/next.config.ts` therefore maps `@rjsf/validator-ajv8`
+  to the poisoned stub at `src/validator-ajv8-stub.ts` (`turbopack.resolveAlias`
+  + webpack `resolve.alias`; the turbopack value is project-root-relative
+  because absolute Windows paths are not accepted there). Bundle scan of the
+  production output confirms the only `ajv` occurrence is the stub's own
+  throw string — no AJV library code ships.
+
+Asserted structurally in `tests/s1.test.tsx` (no ajv in prod dependency
+trees + `sideEffects: false`).
 
 ## RHF decision (S1 — evidence-based, 2026-10-28)
 

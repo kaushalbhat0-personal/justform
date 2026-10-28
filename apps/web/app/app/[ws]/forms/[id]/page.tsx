@@ -38,6 +38,9 @@ export default async function FormDetailPage({
       <p className="muted">
         key {form.key} · rev {form.draft_revision} · {form.status} · schema v{form.schema_version}
       </p>
+      <p>
+        <Link href={`/app/${ws}/forms/${id}/builder`}>Open in builder</Link>
+      </p>
       <FormDetailClient
         workspaceId={ws}
         formId={form.id}

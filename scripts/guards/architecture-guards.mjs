@@ -191,6 +191,53 @@ else ok("G5 no extensions in migrations");
   else ok("G7 form_versions has no direct UPDATE/DELETE grants");
 }
 
+// G8: builder + client boundaries (Phase 5 rules).
+// - No client-side persistence substitutes: no localStorage/sessionStorage in
+//   builder or web app sources (autosave goes through the OCC server boundary).
+// - No second state/validation engines: no zustand/redux/react-hook-form/ajv
+//   imports in builder or web sources (React state + generated Zod only).
+// - The forms-engine package stays UI-free: no react/@rjsf imports there.
+{
+  const readTree = (dir) => {
+    const out = [];
+    const skip = new Set(["node_modules", "dist", ".next", "coverage", ".turbo", "out"]);
+    const walk = (d) => {
+      if (!existsSync(d)) return;
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        if (skip.has(e.name)) continue;
+        const p = join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(ts|tsx)$/.test(e.name)) out.push(p);
+      }
+    };
+    walk(dir);
+    return out;
+  };
+  const clientDirs = [join(root, "packages", "builder"), join(root, "apps", "web")];
+  const clientFiles = clientDirs.flatMap(readTree);
+  let violations = 0;
+  for (const p of clientFiles) {
+    const c = readFileSync(p, "utf8");
+    if (/\blocalStorage\b|\bsessionStorage\b/.test(c)) {
+      fail(`G8 client persistence substitute in ${p} — drafts persist server-side only`);
+      violations += 1;
+    }
+    if (/from\s+["'](zustand|redux|react-redux|react-hook-form|@reduxjs\/toolkit|ajv|@rjsf\/validator-ajv8)[^"']*["']/.test(c)) {
+      fail(`G8 banned state/validation engine import in ${p}`);
+      violations += 1;
+    }
+  }
+  const engineFiles = readTree(join(root, "packages", "forms-engine", "src"));
+  for (const p of engineFiles) {
+    const c = readFileSync(p, "utf8");
+    if (/from\s+["'](react|react-dom|@rjsf\/[^"']+)[^"']*["']/.test(c)) {
+      fail(`G8 UI import in canonical forms-engine: ${p}`);
+      violations += 1;
+    }
+  }
+  if (violations === 0) ok("G8 builder/client boundaries hold (no storage substitutes, no parallel engines, UI-free engine)");
+}
+
 if (failures.length > 0) {
   console.log(`\n${failures.length} guard(s) failed`);
   process.exit(1);

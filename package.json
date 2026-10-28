@@ -14,7 +14,7 @@
     "test": "npm run test --workspaces --if-present",
     "test:unit": "npm run test:unit --workspaces --if-present",
     "guards": "node scripts/guards/architecture-guards.mjs",
-    "build:libs": "npm run build --workspace @formos/domain --workspace @formos/config --workspace @formos/auth --workspace @formos/database --workspace @formos/forms-engine --workspace @formos/renderer --workspace @formos/ui",
+    "build:libs": "npm run build --workspace @formos/domain --workspace @formos/config --workspace @formos/auth --workspace @formos/database --workspace @formos/forms-engine --workspace @formos/renderer --workspace @formos/builder --workspace @formos/ui",
     "build": "npm run build --workspace @formos/web",
     "ci": "npm run build:libs && npm run typecheck && npm run lint && npm run guards && npm run test && npm run build"
   },

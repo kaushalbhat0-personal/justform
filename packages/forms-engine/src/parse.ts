@@ -251,17 +251,20 @@ export function parseCanonicalForm(input: unknown): CanonicalForm {
   const { doc } = migrateToCurrent(input);
   const raw = doc as Record<string, unknown>;
   if (typeof raw["type"] === "undefined" && Array.isArray(raw["pages"])) {
-    for (const page of raw["pages"] as Array<Record<string, unknown>>) {
-      for (const section of (page["sections"] as Array<Record<string, unknown>>) ?? []) {
-        for (const field of (section["fields"] as Array<Record<string, unknown>>) ?? []) {
+    const pages = raw["pages"] as Array<Record<string, unknown>>;
+    for (const [pageIndex, page] of pages.entries()) {
+      const sections = (page["sections"] as Array<Record<string, unknown>>) ?? [];
+      for (const [sectionIndex, section] of sections.entries()) {
+        const fields = (section["fields"] as Array<Record<string, unknown>>) ?? [];
+        for (const [fieldIndex, field] of fields.entries()) {
           const t = field["type"];
           if (typeof t !== "string") {
-            throw new CanonicalError("invalid_shape", "every field requires a type");
+            throw new CanonicalError("invalid_shape", `pages.${pageIndex}.sections.${sectionIndex}.fields.${fieldIndex}: every field requires a type`);
           }
           if (!(MVP_FIELD_TYPES as readonly string[]).includes(t) && !t.startsWith("x-")) {
             throw new CanonicalError(
               "semantic",
-              `unknown field type: ${t} (MVP-12 or x- namespace required)`,
+              `pages.${pageIndex}.sections.${sectionIndex}.fields.${fieldIndex}: unknown field type: ${t} (MVP-12 or x- namespace required)`,
             );
           }
         }
