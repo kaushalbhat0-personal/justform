@@ -1,8 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { can } from "@formos/domain";
 import { getMembership } from "@/lib/identity";
 import { getFormDetail, getVersionSnapshot } from "@/lib/forms";
+import { getPublication } from "@/lib/publications";
+import { serverEnv } from "@/lib/env";
 import { FormDetailClient } from "./_components/FormDetailClient";
+import { PublicationPanel } from "./_components/PublicationPanel";
+import { WorkflowPanel } from "./_components/WorkflowPanel";
+import { getWorkflowForForm } from "@/lib/workflows";
 
 /** Form detail: draft editing, publish, versions, republish (lifecycle proof). */
 export default async function FormDetailPage({
@@ -28,6 +34,10 @@ export default async function FormDetailPage({
     selectedVersion !== null && Number.isInteger(selectedVersion)
       ? await getVersionSnapshot(ws, id, selectedVersion).catch(() => null)
       : null;
+  const publication = await getPublication(ws, id).catch(() => null);
+  const workflowDef = await getWorkflowForForm(ws, id).catch(() => null);
+  const publicUrl =
+    publication === null ? null : `${serverEnv().APP_URL.replace(/\/$/, "")}/f/${publication.publicId}`;
 
   return (
     <div>
@@ -60,6 +70,43 @@ export default async function FormDetailPage({
           <pre>{JSON.stringify(snapshot, null, 2)}</pre>
         </div>
       )}
+      <PublicationPanel
+        workspaceId={ws}
+        formId={form.id}
+        publicId={publication?.publicId ?? null}
+        publicUrl={publicUrl}
+        isActive={publication?.isActive ?? false}
+        publishedVersionNo={publication?.publishedVersionNo ?? null}
+      />
+      <WorkflowPanel
+        workspaceId={ws}
+        formId={form.id}
+        definition={
+          workflowDef === null
+            ? null
+            : { id: workflowDef.id, status: workflowDef.status, currentVersionId: workflowDef.currentVersionId }
+        }
+        canManage={can(
+          { userId: membership.id, workspaceRole: membership.role, grants: [], assignments: [] },
+          "workflow",
+          "update",
+        )}
+        canArchive={can(
+          { userId: membership.id, workspaceRole: membership.role, grants: [], assignments: [] },
+          "workflow",
+          "delete",
+        )}
+      />
+      {can(
+        { userId: membership.id, workspaceRole: membership.role, grants: [], assignments: [] },
+        "submission",
+        "read",
+      ) ? (
+        <p>
+          <Link href={`/app/${ws}/forms/${id}/submissions`}>View submissions →</Link>{" "}
+          <Link href={`/app/${ws}/forms/${id}/tables`}>View table →</Link>
+        </p>
+      ) : null}
       <h2>Version history</h2>
       {versions.length === 0 ? (
         <p className="muted">No published versions yet.</p>

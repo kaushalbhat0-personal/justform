@@ -238,6 +238,268 @@ else ok("G5 no extensions in migrations");
   if (violations === 0) ok("G8 builder/client boundaries hold (no storage substitutes, no parallel engines, UI-free engine)");
 }
 
+// G9: public intake lockdown (Phase 6 — frozen ARCH-FIX-002 boundary).
+// - submissions/outbox: zero DML grants to anon/authenticated (RPC-only writes).
+// - formos.submit_submission: no EXECUTE grant to anon/authenticated/PUBLIC,
+//   and no public-schema wrapper (PostgREST serves only `public`, so no
+//   browser can invoke it). The resolver intentionally stays public.
+// - form_publications: no grants to anon (resolution is RPC-only).
+// Phase 7 evolution: GRANT SELECT ON submissions TO authenticated is allowed
+// (member inbox reads, RLS builder+ policy); DML stays forbidden and anon
+// holds zero privileges of any kind.
+{
+  const grantLine = (t) => new RegExp(`GRANT[^;]*ON\\s+(?:TABLE\\s+)?public\\.${t}[^;]*TO[^;]*`, "gi");
+  for (const t of ["submissions", "outbox"]) {
+    const lines = sql.match(grantLine(t)) ?? [];
+    const bad = lines.filter((l) => {
+      const verbs = (l.split("ON")[0] ?? "").toUpperCase();
+      const to = l.split("TO")[1] ?? "";
+      if (/\b(INSERT|UPDATE|DELETE|TRUNCATE|ALL)\b/.test(verbs) && /\b(anon|authenticated|PUBLIC)\b/.test(to)) return true;
+      if (/\bSELECT\b/.test(verbs) && /(^|[\s,])(anon|PUBLIC)\b/i.test(to)) return true;
+      return false;
+    });
+    if (bad.length > 0) fail(`G9 public.${t} grants a forbidden privilege to anon/authenticated — writes are RPC-only, anon reads nothing`);
+    else ok(`G9 public.${t} has no forbidden anon/authenticated grants`);
+  }
+  const execGrants = [...sql.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+([\w.]+submit_submission[^\s]*)\s*\([^)]*\)\s*TO\s*([^;]+)/gi)];
+  let execBad = 0;
+  for (const g of execGrants) {
+    const targets = g[2].split(",").map((s) => s.trim());
+    if (targets.some((t) => /^(PUBLIC|anon|authenticated)$/i.test(t))) {
+      fail(`G9 ${g[1]} EXECUTE granted to a browser role — intake RPC is intake_caller-only`);
+      execBad += 1;
+    }
+    if (g[1].startsWith("public.")) {
+      fail(`G9 ${g[1]} exposes the intake RPC in the PostgREST schema — browsers could invoke it`);
+      execBad += 1;
+    }
+  }
+  if (execGrants.length === 0) fail("G9 no EXECUTE grant found for submit_submission — intake_caller must hold exactly one");
+  else if (execBad === 0) ok("G9 submit_submission EXECUTE is intake_caller-only with no public-schema surface");
+  if (/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+public\.submit_submission/i.test(sql)) {
+    fail("G9 public.submit_submission wrapper exists — the intake RPC must have no PostgREST surface");
+  } else ok("G9 no public.submit_submission wrapper");
+  const pubLines = sql.match(grantLine("form_publications")) ?? [];
+  const pubBad = pubLines.filter((l) => /(^|[\s,])anon\b/i.test(l.split("TO")[1] ?? ""));
+  if (pubBad.length > 0) fail("G9 form_publications grants to anon — public resolution is RPC-only");
+  else ok("G9 form_publications has no anon grants");
+}
+
+// G10: API/webhook secret hygiene (Phase 9).
+// - api_keys/webhook_endpoints/webhook_deliveries: REVOKE ALL from
+//   anon/authenticated, no browser policies, no direct DML/SELECT grants.
+// - tick-pump DEFINER RPCs (tick_fanout/claim_deliveries/record_delivery)
+//   are service_role-only with no public-schema wrapper.
+// - client components ("use client") never touch secret hashes, encrypted
+//   secrets, service clients, or the Authorization header.
+// - no console.log/info/debug of secret-adjacent values in the API/webhook
+//   request path.
+{
+  const grantLineAll = (t) => new RegExp(`GRANT[^;]*ON\\s+(?:TABLE\\s+)?public\\.${t}[^;]*TO[^;]*`, "gi");
+  for (const t of ["api_keys", "webhook_endpoints", "webhook_deliveries"]) {
+    const lines = sql.match(grantLineAll(t)) ?? [];
+    const bad = lines.filter((l) => /(^|[\s,])(anon|authenticated|PUBLIC)\b/i.test(l.split("TO")[1] ?? ""));
+    if (bad.length > 0) fail(`G10 public.${t} grants a privilege to a browser role — API/webhook storage is RPC/worker-only`);
+    else ok(`G10 public.${t} has no browser-role grants`);
+    const polRe = new RegExp(`CREATE POLICY\\s+\\w+\\s+ON\\s+public\\.${t}`, "i");
+    if (polRe.test(sql)) fail(`G10 public.${t} has an RLS policy — API/webhook tables must stay policy-free (deny-by-default)`);
+    else ok(`G10 public.${t} is policy-free`);
+  }
+  for (const fn of ["tick_fanout", "claim_deliveries", "record_delivery"]) {
+    const grants = [...sql.matchAll(new RegExp(`GRANT\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+([\\w.]+${fn}[^\\s]*)\\s*\\([^)]*\\)\\s*TO\\s*([^;]+)`, "gi"))];
+    if (grants.length === 0) {
+      fail(`G10 no EXECUTE grant found for ${fn} — the tick pump must be service_role-only`);
+      continue;
+    }
+    let bad = 0;
+    for (const g of grants) {
+      const targets = g[2].split(",").map((s) => s.trim());
+      if (!targets.every((t) => /^service_role$/i.test(t))) {
+        fail(`G10 ${g[1]} EXECUTE granted beyond service_role — tick internals must never be browser-invokable`);
+        bad += 1;
+      }
+      if (g[1].startsWith("public.")) {
+        fail(`G10 ${g[1]} exposes a tick RPC in the PostgREST schema`);
+        bad += 1;
+      }
+    }
+    if (bad === 0) ok(`G10 ${fn} EXECUTE is service_role-only with no public-schema surface`);
+  }
+  if (/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+public\.(tick_fanout|claim_deliveries|record_delivery|new_uuid)/i.test(sql)) {
+    fail("G10 public tick-pump wrapper exists — the worker surface must have no PostgREST entrypoint");
+  } else ok("G10 no public tick-pump wrappers");
+  const clientSecretRe = /secret_hash|secret_enc|service_role|SUPABASE_SERVICE_ROLE|CRON_SECRET|WEBHOOK_ENCRYPTION_KEY|INTAKE_DB_ROLE|getServiceClient|verifyApiKeyHash|decryptWebhookSecret|headers\.get\((["'])authorization\1\)/i;
+  const clientHits = [];
+  const walkClients = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (["node_modules", "dist", ".next", "coverage"].includes(e.name)) continue;
+      const p = join(d, e.name);
+      if (e.isDirectory()) walkClients(p);
+      else if (/\.(tsx?|jsx?)$/.test(e.name)) {
+        const c = readFileSync(p, "utf8");
+        if (/["']use client["']/.test(c.slice(0, 800)) && clientSecretRe.test(c)) clientHits.push(p);
+      }
+    }
+  };
+  walkClients(join(root, "apps"));
+  if (clientHits.length > 0) fail(`G10 client components touch API/webhook secret material: ${clientHits.join(", ")}`);
+  else ok("G10 client components are free of API/webhook secret material");
+  const noisy = [];
+  const walkLogs = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (["node_modules", "dist", ".next", "coverage"].includes(e.name)) continue;
+      const p = join(d, e.name);
+      if (e.isDirectory()) walkLogs(p);
+      else if (/\.(ts|tsx)$/.test(e.name)) {
+        const lines = readFileSync(p, "utf8").split("\n");
+        lines.forEach((line, i) => {
+          if (/console\.(log|debug|info)\s*\(/.test(line) && /secret|api[_-]?key|authorization|fullkey|payload|rawbody/i.test(line)) {
+            noisy.push(`${p}:${i + 1}`);
+          }
+        });
+      }
+    }
+  };
+  for (const d of [join(root, "apps", "web", "lib", "api"), join(root, "apps", "web", "lib", "webhooks"), join(root, "apps", "web", "app", "api")]) {
+    if (existsSync(d)) walkLogs(d);
+  }
+  if (noisy.length > 0) fail(`G10 secret-adjacent console logging in the API/webhook path: ${noisy.join(", ")}`);
+  else ok("G10 no secret-adjacent console logging in the API/webhook path");
+}
+
+// G11: metering/billing boundaries (Phase 10, metering-only).
+// - usage_events/plan_limits: REVOKE ALL from anon/authenticated, no
+//   policies, no direct grants (RPC/worker-only writes, RPC-only reads).
+// - workspaces UPDATE is column-restricted (name/slug): plan and billing
+//   columns are not browser-writable.
+// - quota trusted RPCs (check_quota/record_usage) are service_role-only with
+//   no browser-role grants (public wrappers are service-key-only entrypoints).
+// - int-test probes are dead in production (APP_ENV gate in every route).
+// - no payment-provider code anywhere (no SDKs, no provider names).
+{
+  const grantLineAll = (t) => new RegExp(`GRANT[^;]*ON\\s+(?:TABLE\\s+)?public\\.${t}[^;]*TO[^;]*`, "gi");
+  for (const t of ["usage_events", "plan_limits"]) {
+    const lines = sql.match(grantLineAll(t)) ?? [];
+    const bad = lines.filter((l) => /(^|[\s,])(anon|authenticated|PUBLIC)\b/i.test(l.split("TO")[1] ?? ""));
+    if (bad.length > 0) fail(`G11 public.${t} grants a privilege to a browser role — metering storage is RPC-only`);
+    else ok(`G11 public.${t} has no browser-role grants`);
+    const polRe = new RegExp(`CREATE POLICY\\s+\\w+\\s+ON\\s+public\\.${t}`, "i");
+    if (polRe.test(sql)) fail(`G11 public.${t} has an RLS policy — metering tables must stay policy-free`);
+    else ok(`G11 public.${t} is policy-free`);
+  }
+  const wsGrants = sql.match(grantLineAll("workspaces")) ?? [];
+  const wsUpdates = wsGrants.filter((l) => /\bUPDATE\b/i.test(l.split("ON")[0] ?? ""));
+  const wsLast = wsUpdates[wsUpdates.length - 1];
+  if (!wsLast) fail("G11 no UPDATE grant found on workspaces");
+  else if (!/UPDATE\s*\(\s*name\s*,\s*slug\s*\)/i.test(wsLast)) {
+    fail("G11 workspaces UPDATE is not column-restricted to (name, slug) — plan/billing columns must not be browser-writable");
+  } else ok("G11 workspaces UPDATE is column-restricted to (name, slug)");
+  // Trusted metering RPCs: control plane + public wrapper are service_role-only.
+  // Member RPCs: check_quota_member is authenticated-only; get_usage_summary
+  // is authenticated + service_role; anon/PUBLIC never appear.
+  const execTargets = (fn) =>
+    [...sql.matchAll(new RegExp(`GRANT\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+([\\w.]+${fn}[^\\s]*)\\s*\\([^)]*\\)\\s*TO\\s*([^;]+)`, "gi"))];
+  for (const fn of ["check_quota", "record_usage"]) {
+    const grants = [...sql.matchAll(new RegExp(`GRANT\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+([\\w.]+${fn}[^\\s]*)\\s*\\([^)]*\\)\\s*TO\\s*([^;]+)`, "gi"))];
+    if (grants.length === 0) {
+      fail(`G11 no EXECUTE grant found for ${fn}`);
+      continue;
+    }
+    const scoped = grants.filter((g) => g[1] === `formos.${fn}` || g[1] === `public.${fn}`);
+    if (scoped.length === 0) {
+      fail(`G11 no formos/public grant found for ${fn}`);
+      continue;
+    }
+    const bad = scoped.filter((g) => !g[2].split(",").map((x) => x.trim()).every((t) => /^service_role$/i.test(t)));
+    if (bad.length > 0) fail(`G11 trusted ${fn} granted beyond service_role — trusted metering must never be browser-invokable`);
+    else ok(`G11 trusted ${fn} entrypoints are service_role-only`);
+  }
+  {
+    const member = execTargets("check_quota_member");
+    const toAuth = member.some((g) => /(^|[\s,])authenticated\b/i.test(g[2]));
+    const toAnon = member.some((g) => /(^|[\s,])(anon|PUBLIC)\b/i.test(g[2]));
+    if (!toAuth || toAnon) fail("G11 check_quota_member must be authenticated-only");
+    else ok("G11 check_quota_member is authenticated-only");
+    const summary = execTargets("get_usage_summary");
+    const sAuth = summary.some((g) => /(^|[\s,])authenticated\b/i.test(g[2]));
+    const sSvc = summary.some((g) => /(^|[\s,])service_role\b/i.test(g[2]));
+    const sAnon = summary.some((g) => /(^|[\s,])(anon|PUBLIC)\b/i.test(g[2]));
+    if (!sAuth || !sSvc || sAnon) fail("G11 get_usage_summary must be authenticated + service_role only");
+    else ok("G11 get_usage_summary is authenticated + service_role only");
+  }
+  for (const f of ["apps/web/app/api/int-test/inbox/route.ts", "apps/web/app/api/int-test/tables/route.ts"]) {
+    const p = join(root, f);
+    if (!existsSync(p)) {
+      fail(`G11 ${f} missing`);
+      continue;
+    }
+    const c = readFileSync(p, "utf8");
+    if (!/APP_ENV.*production|production.*APP_ENV/.test(c) || !/x-verify-secret/.test(c)) {
+      fail(`G11 ${f} lacks the production kill-switch and/or scheduler-secret gate`);
+    } else ok(`G11 ${f} is production-gated and secret-gated`);
+  }
+  const payHits = [];
+  const payRe = /stripe|razorpay|paddle|paypal|braintree|checkout\.com|chargebee|lemonsqueezy/i;
+  const walkPay = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (["node_modules", "dist", ".next", "coverage", ".turbo", "out"].includes(e.name)) continue;
+      const p = join(d, e.name);
+      if (e.isDirectory()) walkPay(p);
+      else if (/\.(ts|tsx|js|mjs|json)$/.test(e.name) && !/package-lock\.json$/.test(e.name)) {
+        const c = readFileSync(p, "utf8");
+        // package.json files: only flag actual payment dependencies, not prose.
+        if (e.name === "package.json") {
+          try {
+            const deps = { ...JSON.parse(c).dependencies, ...JSON.parse(c).devDependencies };
+            for (const k of Object.keys(deps)) if (payRe.test(k)) payHits.push(`${p} :: ${k}`);
+          } catch { /* ignore unparsable */ }
+        } else if (payRe.test(c)) {
+          // prose mentions (comments/docs) are allowed; code references are not.
+          const lines = c.split("\n").filter((l) => payRe.test(l) && !/^\s*(\/\/|#|\*|<!--)/.test(l) && !/metering-only|no .*payments|never|NOT implement/i.test(l));
+          if (lines.length > 0) payHits.push(`${p} :: ${lines[0].trim().slice(0, 80)}`);
+        }
+      }
+    }
+  };
+  walkPay(join(root, "apps"));
+  walkPay(join(root, "packages"));
+  if (payHits.length > 0) fail(`G11 payment-provider code present: ${payHits.join("; ")}`);
+  else ok("G11 no payment-provider code or dependencies");
+}
+
+// G12: workflow foundation lockdown (Phase 11).
+// - workflow_definitions/versions/instances/tasks: RLS+FORCE (covered by G1),
+//   SELECT-only grants to authenticated (reads are member RLS-gated), zero
+//   INSERT/UPDATE/DELETE grants (writes are DEFINER-RPC-only).
+// - workflow_versions carry the immutability trigger (same rule as form_versions).
+// - internal starter formos.start_workflow_for_submission is callable only by
+//   intake_caller + service_role (no browser/authenticated grant, no public wrapper).
+{
+  const grantLineAll = (t) => new RegExp(`GRANT[^;]*ON\\s+(?:TABLE\\s+)?public\\.${t}[^;]*TO[^;]*`, "gi");
+  for (const t of ["workflow_definitions", "workflow_versions", "workflow_instances", "workflow_tasks"]) {
+    const lines = sql.match(grantLineAll(t)) ?? [];
+    const bad = lines.filter((l) => {
+      const verbs = (l.split("ON")[0] ?? "").toUpperCase();
+      const to = l.split("TO")[1] ?? "";
+      if (/\b(INSERT|UPDATE|DELETE|TRUNCATE|ALL)\b/.test(verbs) && /\b(anon|authenticated|PUBLIC)\b/.test(to)) return true;
+      if (/\bSELECT\b/.test(verbs) && /(^|[\s,])(anon|PUBLIC)\b/i.test(to)) return true;
+      return false;
+    });
+    if (bad.length > 0) fail(`G12 public.${t} grants a forbidden privilege — workflow writes are RPC-only, anon reads nothing`);
+    else ok(`G12 public.${t} has no forbidden grants`);
+  }
+  if (!/TRIGGER\s+workflow_versions_immutable/i.test(sql)) fail("G12 workflow_versions missing immutability trigger");
+  else ok("G12 workflow_versions immutability trigger present");
+  if (/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+public\.start_workflow_for_submission/i.test(sql)) {
+    fail("G12 public.start_workflow_for_submission wrapper exists — the internal starter must have no PostgREST surface");
+  } else ok("G12 no public.start_workflow_for_submission wrapper");
+  const starter = [...sql.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+formos\.start_workflow_for_submission\s*\([^)]*\)\s*TO\s*([^;]+)/gi)];
+  const starterBad = starter.some((g) => !g[1].split(",").map((s) => s.trim()).every((x) => /^(intake_caller|service_role)$/i.test(x)));
+  if (starter.length === 0) fail("G12 no EXECUTE grant found for start_workflow_for_submission");
+  else if (starterBad) fail("G12 start_workflow_for_submission granted beyond intake_caller/service_role");
+  else ok("G12 start_workflow_for_submission is intake_caller/service_role-only");
+}
+
 if (failures.length > 0) {
   console.log(`\n${failures.length} guard(s) failed`);
   process.exit(1);
