@@ -78,6 +78,24 @@ export async function removeMemberAction(workspaceId: string, targetUserId: stri
   revalidatePath(`/app/${workspaceId}`);
 }
 
+/**
+ * IMPL-012 — BFF entry point for authorized workspace teardown.
+ * Owner-only (workspace_admin.delete); the database RPC owns atomicity and
+ * the transaction-local teardown context. No audit row is written: audit
+ * records belong to the deleted tenant aggregate and cascade with it.
+ */
+export async function deleteWorkspaceAction(workspaceId: string): Promise<void> {
+  const membership = await getMembership(workspaceId);
+  if (!membership || !can({ userId: membership.id, workspaceRole: membership.role, grants: [], assignments: [] }, "workspace_admin", "delete")) {
+    fail("Not authorized.");
+  }
+  const supabase = await supabaseServer();
+  const { error } = await supabase.rpc("delete_workspace", { p_workspace_id: workspaceId });
+  if (error) fail(asError(error));
+  revalidatePath("/app");
+  redirect("/app");
+}
+
 export async function inviteAction(
   workspaceId: string,
   email: string,

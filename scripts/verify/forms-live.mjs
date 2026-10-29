@@ -234,7 +234,7 @@ try {
   }
 } finally {
   try {
-    for (const ws of [wsA, wsB]) await admin.from("workspaces").delete().eq("id", ws);
+    for (const ws of [wsA, wsB]) await admin.rpc("delete_workspace", { p_workspace_id: ws });
   } catch { /* best-effort cleanup */ }
   for (const u of users) {
     try {

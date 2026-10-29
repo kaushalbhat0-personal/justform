@@ -370,8 +370,8 @@ try {
   }
 } finally {
   try {
-    await admin.from("workspaces").delete().eq("id", wsA);
-    await admin.from("workspaces").delete().eq("id", wsB);
+    await admin.rpc("delete_workspace", { p_workspace_id: wsA });
+    await admin.rpc("delete_workspace", { p_workspace_id: wsB });
   } catch { /* best-effort cleanup */ }
   for (const n of Object.keys(users)) {
     try {

@@ -13,9 +13,9 @@
  * Stage-0 tick compatibility, and metering integrity. Never prints
  * secrets/tokens (only lengths, counts, timings).
  *
- * Cleanup is best-effort: workspaces holding published versions cannot be
- * deleted while the known immutable-version deletion issue stands (reported,
- * not fixed here). The script reports the deletion outcome explicitly.
+ * Cleanup uses the authorized teardown RPC (IMPL-012): service-role
+ * delete_workspace removes version-holding workspaces atomically; the script
+ * reports the deletion outcome explicitly.
  */
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
@@ -402,25 +402,61 @@ check("W9", "Stage-0 tick absorbs workflow events without failure", async () => 
   if (pending[0].n !== 0) throw new Error(`${pending[0].n} workflow events left unprocessed`);
 });
 
-/* ---------------- W10: workspace deletion probe (known issue + new surface) ---------------- */
-check("W10", "workspace with workflow versions hits the version-immutability deletion blocker", async () => {
-  const wsC = randomUUID();
-  const formC = randomUUID();
-  const mk = await clients.alice.rpc("create_workspace", { p_id: wsC, p_membership_id: randomUUID(), p_name: "DelProbe", p_slug: `delprobe-${tag}` });
-  if (mk.error) throw new Error(`wsC: ${mk.error.message}`);
-  const f = await clients.alice.from("forms").insert({ id: formC, workspace_id: wsC, key: "delprobe", title: "DelProbe", draft_payload: doc });
-  if (f.error) throw new Error(`formC: ${f.error.message}`);
-  const c = await clients.alice.rpc("create_workflow_definition", { p_form_id: formC, p_config: CONFIG });
-  if (c.error) throw new Error(`defC: ${c.error.message}`);
-  const d = await clients.alice.from("workflow_definitions").select("id").eq("form_id", formC).maybeSingle();
-  const a = await clients.alice.rpc("activate_workflow", { p_definition_id: d.data.id });
-  if (a.error) throw new Error(`activateC: ${a.error.message}`);
-  // No form_versions exist here — only workflow rows. Deletion must still fail,
-  // proving workflow_versions add an independent blocker beyond the known
-  // form_versions issue (reported as carryover, not fixed here).
-  const del = await admin.from("workspaces").delete().eq("id", wsC);
-  if (!del.error || !/immutable/.test(del.error.message)) throw new Error(`wsC delete: ${del.error?.message ?? "succeeded unexpectedly"}`);
-  // A version-free workspace deletes cleanly (control: wsB already proved this in cleanup).
+/* ---------------- W10: authorized workspace teardown (IMPL-012) ---------------- */
+check("W10", "owner + service-role teardown removes workflow-only and version-holding workspaces", async () => {
+  const mkWs = async (name, slug) => {
+    const id = randomUUID();
+    const mk = await clients.alice.rpc("create_workspace", { p_id: id, p_membership_id: randomUUID(), p_name: name, p_slug: `${slug}-${tag}` });
+    if (mk.error) throw new Error(`${name}: ${mk.error.message}`);
+    return id;
+  };
+  const mkFormDef = async (ws, key) => {
+    const form = randomUUID();
+    const f = await clients.alice.from("forms").insert({ id: form, workspace_id: ws, key, title: key, draft_payload: doc });
+    if (f.error) throw new Error(`form ${key}: ${f.error.message}`);
+    const c = await clients.alice.rpc("create_workflow_definition", { p_form_id: form, p_config: CONFIG });
+    if (c.error) throw new Error(`def ${key}: ${c.error.message}`);
+    const d = await clients.alice.from("workflow_definitions").select("id").eq("form_id", form).maybeSingle();
+    const a = await clients.alice.rpc("activate_workflow", { p_definition_id: d.data.id });
+    if (a.error) throw new Error(`activate ${key}: ${a.error.message}`);
+    return { form, def: d.data.id };
+  };
+  // wsC: workflow-only (zero form_versions). wsD: published form version holder.
+  const wsC = await mkWs("TeardownC", "teardownc");
+  await mkFormDef(wsC, "solo");
+  const wsD = await mkWs("TeardownD", "teardownd");
+  const { form: formD } = await mkFormDef(wsD, "pub");
+  const vv = await admin.from("form_versions").insert({ id: randomUUID(), form_id: formD, workspace_id: wsD, published_version_no: 1, schema_snapshot: doc, schema_version: 1, schema_hash: "h", renderer_version: "r", publisher_id: users.alice.id });
+  if (vv.error) throw new Error(`form version: ${vv.error.message}`);
+  // Direct version DELETE stays rejected (immutability intact on live data).
+  const wv = await admin.from("workflow_versions").select("id").eq("workspace_id", wsC).maybeSingle();
+  if (wv.error || !wv.data) throw new Error("workflow version missing");
+  const direct = await admin.from("workflow_versions").delete().eq("id", wv.data.id);
+  if (!direct.error || !/immutable/.test(direct.error.message)) throw new Error(`direct version delete: ${direct.error?.message ?? "succeeded unexpectedly"}`);
+  // Unauthorized: admin-of-A is an outsider here; anon holds nothing.
+  const outsider = await clients.bob.rpc("delete_workspace", { p_workspace_id: wsC });
+  if (!outsider.error || !/requires workspace owner/.test(outsider.error.message)) throw new Error(`outsider delete: ${outsider.error?.message ?? "succeeded unexpectedly"}`);
+  const anonDel = await anonC.rpc("delete_workspace", { p_workspace_id: wsC });
+  if (!anonDel.error) throw new Error("anon delete succeeded unexpectedly");
+  // Owner teardown (member path) removes the workflow-only workspace atomically.
+  const own = await clients.alice.rpc("delete_workspace", { p_workspace_id: wsC });
+  if (own.error) throw new Error(`owner teardown: ${own.error.message}`);
+  const goneC = await admin.from("workspaces").select("id").eq("id", wsC);
+  if (goneC.error || (goneC.data ?? []).length !== 0) throw new Error("wsC survived owner teardown");
+  const goneWv = await admin.from("workflow_versions").select("id").eq("workspace_id", wsC);
+  if (goneWv.error || (goneWv.data ?? []).length !== 0) throw new Error("wsC versions survived teardown");
+  // Service-role teardown (trusted maintenance path) removes the version holder.
+  const svc = await admin.rpc("delete_workspace", { p_workspace_id: wsD });
+  if (svc.error) throw new Error(`service teardown: ${svc.error.message}`);
+  const goneD = await admin.from("workspaces").select("id").eq("id", wsD);
+  if (goneD.error || (goneD.data ?? []).length !== 0) throw new Error("wsD survived service teardown");
+  const goneFv = await admin.from("form_versions").select("id").eq("workspace_id", wsD);
+  if (goneFv.error || (goneFv.data ?? []).length !== 0) throw new Error("wsD versions survived teardown");
+  // Isolation: the suite workspaces are untouched.
+  for (const ws of [wsA, wsB]) {
+    const r = await admin.from("workspaces").select("id").eq("id", ws);
+    if (r.error || (r.data ?? []).length !== 1) throw new Error(`isolation broken for ${ws.slice(0, 8)}`);
+  }
 });
 
 /* ------------------------------------------------- run + cleanup */
@@ -441,7 +477,7 @@ try {
 } finally {
   for (const ws of [wsA, wsB]) {
     try {
-      const { error } = await admin.from("workspaces").delete().eq("id", ws);
+      const { error } = await admin.rpc("delete_workspace", { p_workspace_id: ws });
       deletionNote += `ws=${ws.slice(0, 8)} delete ${error ? `FAILED: ${error.message}` : "ok"}; `;
     } catch (e) {
       deletionNote += `ws=${ws.slice(0, 8)} delete threw; `;

@@ -192,8 +192,8 @@ try {
   }
 } finally {
   try {
-    await admin.from("workspaces").delete().eq("id", ws);
-  } catch { /* known deletion blocker; reported */ }
+    await admin.rpc("delete_workspace", { p_workspace_id: ws });
+  } catch { /* best-effort cleanup */ }
   for (const n of Object.keys(users)) {
     try {
       await admin.auth.admin.deleteUser(users[n].id);

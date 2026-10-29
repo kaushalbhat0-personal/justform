@@ -250,7 +250,7 @@ try {
   }
 } finally {
   try {
-    await admin.from("workspaces").delete().eq("id", wsId);
+    await admin.rpc("delete_workspace", { p_workspace_id: wsId });
   } catch { /* best-effort cleanup */ }
   for (const u of users) {
     try {

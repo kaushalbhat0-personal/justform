@@ -500,6 +500,43 @@ else ok("G5 no extensions in migrations");
   else ok("G12 start_workflow_for_submission is intake_caller/service_role-only");
 }
 
+// G13: authorized workspace teardown (Phase 12).
+// - formos.delete_workspace exists; thin public.delete_workspace wrapper exists
+//   (PostgREST surface for the BFF/server action).
+// - EXECUTE on formos.delete_workspace is authenticated/service_role-only;
+//   public wrapper is authenticated-only (anon holds nothing).
+// - formos.teardown_context (the bypass switch) carries no EXECUTE grant to
+//   any caller — only delete_workspace invokes it in-transaction.
+// - Both version immutability triggers honor the teardown context instead of
+//   being removed; owner-only error text is present in delete_workspace.
+{
+  if (!/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+formos\.delete_workspace\s*\(/i.test(sql)) {
+    fail("G13 formos.delete_workspace is missing");
+  } else ok("G13 formos.delete_workspace exists");
+  if (!/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+public\.delete_workspace\s*\(/i.test(sql)) {
+    fail("G13 public.delete_workspace wrapper is missing");
+  } else ok("G13 public.delete_workspace wrapper exists");
+  const dwGrants = [...sql.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+formos\.delete_workspace\s*\([^)]*\)\s*TO\s*([^;]+)/gi)];
+  const dwBad = dwGrants.some((g) => !g[1].split(",").map((s) => s.trim()).every((x) => /^(authenticated|service_role)$/i.test(x)));
+  if (dwGrants.length === 0) fail("G13 no EXECUTE grant found for formos.delete_workspace");
+  else if (dwBad) fail("G13 formos.delete_workspace granted beyond authenticated/service_role");
+  else ok("G13 formos.delete_workspace is authenticated/service_role-only");
+  const pubDwGrants = [...sql.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.delete_workspace\s*\([^)]*\)\s*TO\s*([^;]+)/gi)];
+  const pubDwBad = pubDwGrants.some((g) => !g[1].split(",").map((s) => s.trim()).every((x) => /^authenticated$/i.test(x)));
+  if (pubDwGrants.length === 0) fail("G13 no EXECUTE grant found for public.delete_workspace");
+  else if (pubDwBad) fail("G13 public.delete_workspace granted beyond authenticated");
+  else ok("G13 public.delete_workspace is authenticated-only");
+  if (/GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+formos\.teardown_context/i.test(sql)) {
+    fail("G13 formos.teardown_context must carry no EXECUTE grant (delete_workspace-only)");
+  } else ok("G13 formos.teardown_context carries no EXECUTE grant");
+  const triggerBodies = [...sql.matchAll(/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+formos\.prevent_(workflow_)?version_mutation\(\)[\s\S]*?\$\$;/gi)];
+  const scoped = triggerBodies.filter((m) => /teardown_context\(\)/.test(m[0]));
+  if (scoped.length < 2) fail("G13 version immutability triggers must honor teardown_context (form + workflow)");
+  else ok("G13 version immutability triggers honor teardown_context");
+  if (!/workspace deletion requires workspace owner/i.test(sql)) fail("G13 delete_workspace owner check is missing");
+  else ok("G13 delete_workspace enforces workspace owner");
+}
+
 if (failures.length > 0) {
   console.log(`\n${failures.length} guard(s) failed`);
   process.exit(1);
