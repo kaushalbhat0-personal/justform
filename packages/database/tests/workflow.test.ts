@@ -178,6 +178,26 @@ describe("workflow foundation", () => {
     ).rejects.toThrow(/immutable/);
   });
 
+  it("reactivation versions forward while in-flight instances stay pinned", async () => {
+    await t.asUser(U.alice, `SELECT formos.create_workflow_definition($1, $2, $3::jsonb)`, [
+      U.defA,
+      U.formA,
+      JSON.stringify(CONFIG),
+    ]);
+    const v1 = await t.asUser(U.alice, `SELECT formos.activate_workflow($1)`, [U.defA]);
+    const v1id = (v1[0] as { activate_workflow: { version_id: string } }).activate_workflow.version_id;
+    await t.asSuperuser(
+      `INSERT INTO public.submissions (id, workspace_id, form_id, publication_id, form_version_id, payload, idempotency_key)
+       VALUES ($1,$2,$3,$4,$5,'{"reason":"x"}'::jsonb,'wf-key-pin')`,
+      [U.sub1, U.wsA, U.formA, U.pubA, U.verA1],
+    );
+    await t.asUser(U.alice, `SELECT formos.start_workflow($1)`, [U.sub1]);
+    const v2 = await t.asUser(U.alice, `SELECT formos.activate_workflow($1)`, [U.defA]);
+    expect((v2[0] as { activate_workflow: { version_no: number } }).activate_workflow.version_no).toBe(2);
+    const inst = await t.asUser(U.alice, `SELECT workflow_version_id FROM public.workflow_instances WHERE submission_id = $1`, [U.sub1]);
+    expect((inst[0] as { workflow_version_id: string }).workflow_version_id).toBe(v1id);
+  });
+
   it("rejects invalid configs and duplicate definitions", async () => {
     await expect(
       t.asUser(U.alice, `SELECT formos.create_workflow_definition($1, $2, $3::jsonb)`, [
