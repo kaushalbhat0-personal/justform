@@ -115,6 +115,16 @@ export async function createFormAction(input: {
   const formId = uuidv7();
   const doc = parseDocument(input.documentJson, formId, key);
   const supabase = await supabaseServer();
+  // Plan quota (single entitlement boundary; state-based, no usage row).
+  const { data: quota, error: quotaError } = await supabase.rpc("check_quota_member", {
+    p_workspace_id: membership.workspaceId,
+    p_metric: "active_forms",
+    p_quantity: 1,
+  });
+  if (quotaError) throw new DomainError({ code: "internal", message: "Could not evaluate quota." });
+  if ((quota as { allowed?: boolean } | null)?.allowed !== true) {
+    throw new DomainError({ code: "plan_limit", message: "Form limit reached for your workspace plan." });
+  }
   const { error } = await supabase.from("forms").insert({
     id: formId,
     workspace_id: membership.workspaceId,
@@ -275,6 +285,16 @@ export async function publishAction(input: {
     resourceType: "form_version",
     resourceId: versionId,
     diff: { formId: row.id, publishedVersion, schemaHash },
+  });
+  // Publication availability: repoint the form's stable public identity at
+  // the new immutable version (provisions it on first publish). The public
+  // route never reads the mutable draft — only this pinned version.
+  const { syncPublicationToLatestVersion } = await import("./publications");
+  await syncPublicationToLatestVersion({
+    workspaceId: membership.workspaceId,
+    formId: row.id,
+    publishedVersionNo: publishedVersion,
+    publisherId: user.id,
   });
   revalidatePath(`/app/${membership.workspaceId}/forms/${row.id}`);
   return { ok: true, publishedVersion };

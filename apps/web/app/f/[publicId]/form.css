@@ -1,0 +1,19 @@
+/* Public respondent form (Phase 6). Mobile-first; tokens only; reduced motion. */
+.public-form { max-width: 640px; }
+.public-form .hp-wrap {
+  position: absolute;
+  left: -9999px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+.public-form .is-submitting { opacity: 0.6; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .public-form *,
+  .public-form *::before,
+  .public-form *::after {
+    animation: none;
+    transition: none;
+  }
+}

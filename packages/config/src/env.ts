@@ -18,6 +18,18 @@ const serverSchema = z.object({
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().min(16).optional(),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required for migrations/workers").optional(),
+  // Optional direct-connection override for the intake_caller path (e.g. the
+  // Supavisor pooler host when `db.<ref>.supabase.co` does not resolve).
+  INTAKE_DATABASE_URL: z.string().min(1).optional(),
+  // Optional direct-connection override for the Stage 0 tick pump (same
+  // shape as DATABASE_URL, superuser over session-mode pooler accepted).
+  // The pump RPCs have no PostgREST surface, so this path is mandatory.
+  TICK_DATABASE_URL: z.string().min(1).optional(),
+  // AES-256-GCM key (64 hex chars) for webhook signing secrets at rest.
+  // Required at runtime for webhook create/rotate/delivery; absent in tests
+  // that never touch secrets (validation stays optional to avoid breaking
+  // unrelated boot paths — the tick route fails closed without it).
+  WEBHOOK_ENCRYPTION_KEY: z.string().optional(),
 });
 
 const secretSchema = z.object({
@@ -25,6 +37,10 @@ const secretSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   INTAKE_DB_ROLE_PASSWORD: z.string().optional(),
   BILLING_PROVIDER_SECRET: z.string().optional(),
+  // Optional bot-protection provider (Phase 6 boundary). When unset, forms
+  // that request captcha skip verification and log a warning (fail-open is
+  // documented; enforcement activates the moment the secret is configured).
+  TURNSTILE_SECRET_KEY: z.string().optional(),
 });
 
 const envSchema = publicSchema.merge(serverSchema).merge(secretSchema);
